@@ -42,35 +42,7 @@
 
 ---
 
-## 二、根因：软件启动时会做 9 项完整性自检
 
-界面的「正在获取资源 → × 缺少一些必需文件」不是猜测，而是 App 主进程里
-`utils/installationIntegrity` 这段代码的判定结果（未混淆的 `main.js` 里可读）：
-
-```js
-files    = ["current.json", "groups.json", "installation.json"]  // 必须存在
-dirs     = ["depots", "cache"]                                    // 必须存在且「非空」
-launchables = [ "…/logioptionsplus_agent.app",
-                "…/logioptionsplus_updater.app",
-                "/Library/LaunchDaemons/com.logi.optionsplus.updater.plist",
-                "/Library/LaunchAgents/com.logi.optionsplus.plist" ]
-
-function dirNonEmpty(p){
-  return fs.existsSync(p) && fs.statSync(p).isDirectory() && fs.readdirSync(p).length > 0
-}
-```
-
-**只要 `cache` 目录被整个删掉，自检就不过**，于是：
-
-- 界面卡在「正在获取资源 × 缺少一些必需文件」（问题 2）
-- 同时触发后台自动修复 → 重新下载安装包与组件（**这才是"重启后又下载回来"的真正原因**，问题 1）
-
-> v1.0 为了省 1.32 GB 把整个 `cache` 目录删了 —— 这是致命错误。
-> v2.1 改为：**只删 `cache` 里 ≥10 MB 的大归档，保留小缓存文件让目录保持非空。**
-> 真正的大头（主程序 811 MB / 语音 321 MB / 插件 124 MB）依然全部释放，
-> 只多保留约 14 MB。若目录为空，脚本会自动写入一个 `.slim-placeholder` 占位文件。
-
----
 
 ## 三、保留 / 删除清单
 
@@ -101,22 +73,6 @@ function dirNonEmpty(p){
 
 ---
 
-## 四、四道"防复活"措施
-
-| # | 措施 | 为什么 |
-|---|---|---|
-| ★ | **`cache` 只删大归档、保留小缓存** | 让完整性自检通过。自检不过 → 报错 + 自动重装修复，两个问题同源 |
-| 1 | **改写 `features_config/features.json`**：把 LogiVoice / AI Portal 两个官方配置的条件改成永不成立，并新增一条 `Slim - 停用非鼠标组件` 规则覆盖其余 11 个 depot | 官方就是靠"条件不成立的 `conditionalDepots` 进入 `builds/<id>.filter.json` 的 `filtered` 名单"来排除组件的（`predefined_profiles`、`system_actions` 就是这么被排除的，它们同样是 `required: true`）。v1.0 **删掉整个配置**是搞反了：删掉配置后组件不再被过滤，反而变成必须安装 |
-| 2 | **修剪 `installation.json`**：删掉指向已删文件的 1062 条记录 | 保持安装记录与实际一致（不影响启动自检，自检只查上面那 9 项） |
-| 3 | **删除系统 pkg 收据** | 不删的话系统与后台仍认为 RightSight / 插件服务"已安装" |
-| 4 | **关闭自动检查更新与自动下载**（`periodic_check.json`） | 减少后台自行拉取的机会；想更新时在界面里手动检查，或把这两项改回 `true` |
-
-改写前所有涉及的状态文件都会备份到
-`/Library/Application Support/Logi/LogiOptionsPlus/.slim_backup/<时间戳>/`，
-`--restore` 可一键还原。
-
----
-
 ## 五、验证流程
 
 1. 双击运行脚本（会要求密码）；
@@ -142,37 +98,3 @@ function dirNonEmpty(p){
 - 瘦身+回滚机制已用 agent 的真实副本演练：268 MB → 134 MB（省 141 MB，12 个文件），
   回滚后恢复 `x86_64 arm64` 与 268 MB
 - 改写逻辑已验证 **幂等**（连续两次结果一致）且输出均为合法 JSON
-
----
-
-## 七、遇到「logioptionsplus 因为出现问题而无法打开…你可能需要重新安装该应用程序」
-
-**这不是软件坏了，先不要重装。** 这是 macOS 的 LaunchServices 数据库里存了
-**指向已失效路径的注册记录**，系统按软件 ID 找不到程序。
-
-一条命令修复：
-
-```bash
-"/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister" \
-  -f -R -trusted /Applications/logioptionsplus.app
-```
-
-> ⚠️ 不要为了测试把 `logioptionsplus.app` 复制到别处再启动：副本会用同一个软件 ID
-> 注册新路径，删掉副本后就会留下这种失效记录。脚本已在最后一步内置自动刷新注册。
-
----
-
-## 七、遇到「logioptionsplus 因为出现问题而无法打开…你可能需要重新安装该应用程序」
-
-**这不是软件坏了，先不要重装。** 这是 macOS 的 LaunchServices 数据库里存了
-**指向已失效路径的注册记录**，系统按软件 ID 找不到程序。
-
-一条命令修复：
-
-```bash
-"/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister" \
-  -f -R -trusted /Applications/logioptionsplus.app
-```
-
-> ⚠️ 不要为了测试把 `logioptionsplus.app` 复制到别处再启动：副本会用同一个软件 ID
-> 注册新路径，删掉副本后就会留下这种失效记录。脚本已在最后一步内置自动刷新注册。
